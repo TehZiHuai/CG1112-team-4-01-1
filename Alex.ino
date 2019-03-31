@@ -696,7 +696,7 @@ void loop() {
 // Uncomment the code below for Week 9 Studio 2
 
  // put your main code here, to run repeatedly:
-  TPacket recvPacket; // This holds commands from the Pi
+  TPacket recvPacket; // This holds commands from he Pi
 
   TResult result = readPacket(&recvPacket);
   
