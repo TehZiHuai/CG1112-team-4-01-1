@@ -1,7 +1,8 @@
 #include <serialize.h>
 #include "packet.h"
 #include "constants.h"
-#include <math.h>
+#define COLOUR_CHECK true
+#define IR_CHECK true
 
 typedef enum
 {
@@ -21,7 +22,7 @@ volatile TDirection dir = STOP;
 // wheel encoder.
 
 #define COUNTS_PER_REV      192
- 
+
 // Wheel circumference in cm.
 // We will use this to calculate forward/backward distance traveled 
 // by taking revs * WHEEL_CIRC
@@ -30,8 +31,8 @@ volatile TDirection dir = STOP;
 
 // Motor control pins. You need to adjust these till
 // Alex moves in the correct direction
-#define LF                  7   // Left forward pin
-#define LR                  6   // Left reverse pin
+#define LF                  6   // Left forward pin
+#define LR                  5   // Left reverse pin
 #define RF                  10  // Right forward pin
 #define RR                  11  // Right reverse pin
 
@@ -42,6 +43,20 @@ volatile TDirection dir = STOP;
 #define ALEX_LENGTH         18
 #define ALEX_BREADTH        13
 
+// TCS230 or TCS3200 pins wiring to Arduino
+//#define S0 0
+//#define S1 1
+//#define S3 7
+
+#define S2 4
+#define sensorOut 8
+
+// IR
+#define FRONT 7
+#define BACK 9
+#define LEFT 12
+#define RIGHT 13
+
 /*
  *    Alex's State Variables
  */
@@ -51,7 +66,7 @@ volatile TDirection dir = STOP;
 float AlexDiagonal = 0.0;
 
 // Alex's turnign circumference, calculated once
-float AlexCirc = 0.0;  
+float AlexCirc = 0.0; 
 
 // Store the ticks from Alex's left and
 // right encoders for moving forwards and backwards
@@ -66,12 +81,7 @@ volatile unsigned long rightForwardTicksTurns;
 volatile unsigned long leftReverseTicksTurns; 
 volatile unsigned long rightReverseTicksTurns;
 
-/*UNECESSARY
-// Store the revolutions on Alex's left
-// and right wheels
-volatile unsigned long leftRevs; 
-volatile unsigned long rightRevs;
-*/
+
 // Forward and backward distance traveled
 volatile unsigned long forwardDist;
 volatile unsigned long reverseDist;
@@ -83,6 +93,24 @@ unsigned long newDist;
 // Variables to keep track of our turing angle
 unsigned long deltaTicks;
 unsigned long targetTicks;
+
+// Stores frequency read by the photodiodes
+int redFrequency = 0;
+int greenFrequency = 0;
+int count = 0;
+int red_ave = 100;
+int green_ave = 0;
+int color;
+int red;
+int green;
+
+
+// Store values for IR sensor
+int IR;
+int front_out;
+int back_out;
+int left_out;
+int right_out;
 
 /*
  * 
@@ -131,6 +159,14 @@ void sendStatus()
   statusPacket.params[7] = rightReverseTicksTurns;
   statusPacket.params[8] = forwardDist;
   statusPacket.params[9] = reverseDist;
+  if (COLOUR_CHECK) {
+    statusPacket.params[10] = color;
+    //statusPacket.params[10] = red;
+    //statusPacket.params[11] = green;
+  }
+  if (IR_CHECK) {
+    statusPacket.params[12] = IR;
+  }
   sendResponse(&statusPacket);
 }
 
@@ -243,20 +279,6 @@ void leftISR()
   }
 
 
-/*   
-  leftRevs = leftTicks / COUNTS_PER_REV;
-
-  // We calculate forwardDist only in leftISR because we
-  // assume that the left and right wheels move at the same
-  // time.
-  forwardDist = leftRevs * WHEEL_CIRC;
-*/ 
-  Serial.print("LEFT: ");
-  Serial.println(leftForwardTicks);//NO LEFT TICKS
-  Serial.print("forwardDist: ");
-  Serial.println(forwardDist);
-
-
   
 }
 
@@ -274,11 +296,6 @@ void rightISR()
   else if (dir == RIGHT){
     rightReverseTicksTurns++;
   }
-
-/*
-  rightRevs = rightTicks / COUNTS_PER_REV;
-*/  Serial.print("RIGHT: ");
-  Serial.println(rightForwardTicks);
 
 }
 
@@ -327,7 +344,6 @@ void setupSerial()
 // Start the serial connection. For now we are using
 // Arduino wiring and this function is empty. We will
 // replace this later with bare-metal code.
-
 void startSerial()
 {
   // Empty for now. To be replaced with bare-metal code
@@ -404,9 +420,9 @@ int pwmVal(float speed)
 void forward(float dist, float speed)
 {
   if (dist > 0)
-    deltaDist  = 9999999;
+    deltaDist  = dist*0.92;
   else
-    deltaDist = dist;
+    deltaDist = 9999999;
   newDist = forwardDist + deltaDist;
 
   
@@ -424,8 +440,10 @@ void forward(float dist, float speed)
   // RF = Right forward pin, RR = Right reverse pin
   // This will be replaced later with bare-metal code.
   
-  analogWrite(LF, val);
-  analogWrite(RF, val);
+  analogWrite(LF, 204);
+  analogWrite(RF, 143);
+//  analogWrite(LF, val);
+//  analogWrite(RF, 0.7*val);
   analogWrite(LR,0);
   analogWrite(RR, 0);
 }
@@ -438,11 +456,11 @@ void forward(float dist, float speed)
 void reverse(float dist, float speed)
 {
   if(dist>0)
-    deltaDist = dist;
+    deltaDist = dist*0.92;
   else
     deltaDist = 9999999;
 
-  newDist = forwardDist + deltaDist;
+  newDist = reverseDist + deltaDist;
   
   dir = BACKWARD;
   
@@ -455,8 +473,10 @@ void reverse(float dist, float speed)
   // LF = Left forward pin, LR = Left reverse pin
   // RF = Right forward pin, RR = Right reverse pin
   // This will be replaced later with bare-metal code.
-  analogWrite(LR, val);
-  analogWrite(RR, val);
+  analogWrite(LR, 204);
+  analogWrite(RR,143);
+//  analogWrite(LR, val);
+//  analogWrite(RR, 0.7*val);
   analogWrite(LF, 0);
   analogWrite(RF, 0);
 }
@@ -476,6 +496,7 @@ unsigned long computeDeltaTicks(float ang)
   return ticks;
 }
 
+
 // Turn Alex left "ang" degrees at speed "speed".
 // "speed" is expressed as a percentage. E.g. 50 is
 // turn left at half speed.
@@ -483,23 +504,23 @@ unsigned long computeDeltaTicks(float ang)
 // turn left indefinitely.
 void left(float ang, float speed)
 {
+  if (ang > 0)
+    deltaTicks = computeDeltaTicks(ang)* 0.3;
+  else
+    deltaTicks = 99999999;
+
+  dir = LEFT;
   int val = pwmVal(speed);
   
-  dir = LEFT;
-  
-  if (ang == 0)
-    deltaTicks = 99999999;
-  else
-    deltaTicks = computeDeltaTicks(ang);
-
   targetTicks = leftReverseTicksTurns + deltaTicks;
-
-  // For now we will ignore ang. We will fix this in Week 9.
+// For now we will ignore ang. We will fix this in Week 9.
   // We will also replace this code with bare-metal later.
   // To turn left we reverse the left wheel and move
   // the right wheel forward.
-  analogWrite(LR, val);
-  analogWrite(RF, val);
+  analogWrite(LR, 220);
+  analogWrite(RF, 220);
+  //analogWrite(LR, val);
+  //analogWrite(RF, val);
   analogWrite(LF, 0);
   analogWrite(RR, 0);
 }
@@ -511,23 +532,27 @@ void left(float ang, float speed)
 // turn right indefinitely.
 void right(float ang, float speed)
 {
-  int val = pwmVal(speed);
+
+  if (ang > 0)
+    deltaTicks = computeDeltaTicks(ang) * 0.3;
+  else
+    deltaTicks = 99999999;
   
   dir = RIGHT;
- 
-  if (ang == 0)
-    deltaTicks = 99999999;
-  else
-    deltaTicks = computeDeltaTicks(ang);
+  int val = pwmVal(speed);
+
 
   targetTicks = rightReverseTicksTurns + deltaTicks;
+
 
   // For now we will ignore ang. We will fix this in Week 9.
   // We will also replace this code with bare-metal later.
   // To turn right we reverse the right wheel and move
   // the left wheel forward.
-  analogWrite(RR, val);
-  analogWrite(LF, val);
+  //analogWrite(RR, val);
+  //analogWrite(LF, val);
+  analogWrite(RR, 220);
+  analogWrite(LF, 220);
   analogWrite(LR, 0);
   analogWrite(RF, 0);
 }
@@ -600,6 +625,10 @@ void handleCommand(TPacket *command)
         sendOK();
         stop();
       break;
+    case COMMAND_GET_STATS:
+        sendOK();
+        sendStatus();
+      break;
     
 
     /*
@@ -650,10 +679,31 @@ void waitForHello()
 }
 
 void setup() {
+  
   // Compute the diagonal
   AlexDiagonal = sqrt((ALEX_LENGTH * ALEX_LENGTH) + (ALEX_BREADTH * ALEX_BREADTH));
   AlexCirc = PI * AlexDiagonal;
+
+  // Setting the outputs for TCS3200 color sensor
+  //pinMode(S0, OUTPUT);
+  //pinMode(S1, OUTPUT);
+  pinMode(S2, OUTPUT);
+  //pinMode(S3, OUTPUT);
+  pinMode(sensorOut, INPUT);
+
+  // Setting for IR sensor
+  pinMode(FRONT, INPUT);
+  pinMode(LEFT, INPUT);
+  pinMode(RIGHT, INPUT);
+  pinMode(BACK, INPUT);
   
+  // Setting frequency scaling to 20%
+  //digitalWrite(S0,HIGH);
+  //digitalWrite(S1,LOW);
+  
+   // Begins serial communication 
+  Serial.begin(9600);
+
   cli();
   setupEINT();
   setupSerial();
@@ -672,8 +722,7 @@ void handlePacket(TPacket *packet)
     case PACKET_TYPE_COMMAND:
       handleCommand(packet);
       break;
-
-    case PACKET_TYPE_RESPONSE:
+case PACKET_TYPE_RESPONSE:
       break;
 
     case PACKET_TYPE_ERROR:
@@ -687,15 +736,9 @@ void handlePacket(TPacket *packet)
   }
 }
 
+
 void loop() {
 
-// Uncomment the code below for Step 2 of Activity 3 in Week 8 Studio 2
-
-// forward(0, 100);
-
-// Uncomment the code below for Week 9 Studio 2
-
- // put your main code here, to run repeatedly:
   TPacket recvPacket; // This holds commands from he Pi
 
   TResult result = readPacket(&recvPacket);
@@ -710,8 +753,7 @@ void loop() {
   {
     sendBadChecksum();
   } 
-      
-      
+  
 
   if(deltaDist > 0)
   {
@@ -723,7 +765,7 @@ void loop() {
         newDist = 0;
         stop();
       }
-    } 
+    }
     else if(dir==BACKWARD)
     {
       if(reverseDist > newDist)
@@ -733,10 +775,11 @@ void loop() {
         stop();
       }
     }
-    else if(dir == STOP)
+
+    else if (dir == STOP)
     {
-      deltaDist=0;
-      newDist=0;
+      deltaTicks = 0;
+      targetTicks = 0;
       stop();
     }
   }
@@ -753,7 +796,7 @@ void loop() {
       }
     }
     else if (dir == RIGHT)
-    {
+      {
       if (rightReverseTicksTurns >= targetTicks)
       {
         deltaTicks = 0;
@@ -768,4 +811,76 @@ void loop() {
       stop();
     }
   }
+
+ if (COLOUR_CHECK) { 
+  // Setting RED (R) filtered photodiodes to be read
+  digitalWrite(S2,LOW);
+  //digitalWrite(S3,LOW);
+  
+  // Reading the output frequency
+  redFrequency = pulseIn(sensorOut, LOW);
+  
+  // Setting GREEN (G) filtered photodiodes to be read
+  digitalWrite(S2,HIGH);
+  //digitalWrite(S3,HIGH);
+  
+  // Reading the output frequency
+  greenFrequency = pulseIn(sensorOut, LOW);
+
+  count += 1;
+  
+  if (count == 4) {
+    red_ave /= 5; 
+    green_ave /= 5;
+
+    red = red_ave;
+    green = green_ave;
+
+  if (red_ave < green_ave) {
+    color = 0;
+      //color = 100*red_ave;
+  }
+  else {
+    color = 1;
+      //color = 10000*green_ave;
+  }
+    
+    count = 0; // reset
+    red_ave = 0;
+    green_ave = 0;
+    
+  } else {
+    red_ave += redFrequency;
+    green_ave += greenFrequency;
+  }
+ }
+
+if (IR_CHECK){
+//reading IR sensors
+  front_out = digitalRead(FRONT);
+  back_out = digitalRead(BACK);
+  left_out = digitalRead(LEFT);
+  right_out = digitalRead(RIGHT);
+  
+  if(front_out == 0){
+    reverse(2,0);
+    IR = 0;
+    sendStatus();
+  }  
+  else if(back_out == 0){
+    forward(2,0);
+    IR = 1;
+    sendStatus();
+  }
+  else if(left_out == 0){
+    left(5,0);
+    IR = 2;
+    sendStatus();
+  } 
+  else if(right_out == 0){
+    right(5,0);
+    IR = 3;
+    sendStatus();
+  }
+}
 }
