@@ -481,7 +481,7 @@ void left()
 
 
 void right()
-
+{
 //  if (ang > 0)
 //    deltaTicks = computeDeltaTicks(ang) * 0.25;
 //  else
